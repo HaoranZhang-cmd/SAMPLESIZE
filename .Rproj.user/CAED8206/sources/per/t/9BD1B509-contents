@@ -1,0 +1,337 @@
+#' estimate the binormal parameters for unpaired ordinal data,as well as their variances and covariances
+#' @param data0 ordinal test result from undiseased individuals
+#' @param data1 ordinal test result from diseased individuals
+#' @export
+params_estimate_ordinal_unpaired<-function(data0,data1){
+  K<-length(data0)
+  n0<-sum(data0)
+  n1<-sum(data1)
+  #----------------计算对数似然函数
+  loglikelihood<-function(params) {
+    th<-params[1:(K-1)]
+    mu0<-0
+    sigma0<-1
+    a<-params[K]
+    b<-params[K+1]
+    if(any(diff(th)<0)){
+      return(Inf)
+    }
+    if(b<=0){
+      return(Inf)
+    }
+    mu1<-a*sigma0/b+mu0
+    sigma1<-sigma0/b
+    result<-data0[1]*log(pnorm(th[1],mean=mu0,sd=sigma0))+data0[K]*log(1-pnorm(th[K-1],mean=mu0,sd=sigma0))+data1[1]*log(pnorm(th[1],mean=mu1,sd=sigma1))+data1[K]*log(1-pnorm(th[K-1],mean=mu1,sd=sigma1))
+    for (i in 1:(K-2)) {
+      result<-result+data0[i+1]*log(pnorm(th[i+1],mean=mu0,sd=sigma0)-pnorm(th[i],mean=mu0,sd=sigma0))+data1[i+1]*log(pnorm(th[i+1],mean=mu1,sd=sigma1)-pnorm(th[i],mean=mu1,sd=sigma1))
+    }
+    return(-result)
+  }
+  start_params<-c(seq(0,1,length=K-1),1,1)
+  result<-optim(start_params,loglikelihood,method="BFGS")
+  print(result)
+  hessian<-numDeriv::hessian(loglikelihood, result$par)
+  cov_matrix<-solve(hessian)
+  estimation<-list(th=NULL,a=NULL,b=NULL,cov_matrix=NULL)
+  estimation$th<-result$par[1:(K-1)]
+  estimation$a<-result$par[K]
+  estimation$b<-result$par[K+1]
+  estimation$cov_matrix<-cov_matrix[(K):(K+1),(K):(K+1)]
+  return(estimation)
+}
+
+
+#' estimate the binormal parameters for paired ordinal data,as well as their variances and covariances
+#' @param data0 a matrix representing ordinal test result of undiseased individuals
+#' @param data1 a matrix representing ordinal test result of diseased individuals
+#' @export
+params_estimate_ordinal_paired<-function(data0,data1){
+  K<-nrow(data0)
+  distribution0 <- matrix(0,nrow=K,ncol=K)
+  distribution1 <- matrix(0,nrow=K,ncol=K)
+  n0<-sum(data0)
+  n1<-sum(data1)
+  #----------------计算对数似然函数
+  loglikelihood<-function(params) {
+    #两个test的decision thresholds
+    th1<-c(-Inf,params[1:(K-1)],Inf)
+    th2<-c(-Inf,params[K:(2*K-2)],Inf)
+    #_前的1/2表示是哪一个test,_后的0/1表示是否患病
+    mu1_0<-0
+    sigma1_0<-1
+    mu2_0<-0
+    sigma2_0<-1
+    rho_0<-params[2*K-1]
+    rho_1<-params[2*K]
+    a1<-params[2*K+1]
+    b1<-params[2*K+2]
+    a2<-params[2*K+3]
+    b2<-params[2*K+4]
+    mu1_1<-a1*sigma1_0/b1+mu1_0
+    mu2_1<-a2*sigma2_0/b2+mu2_0
+    sigma1_1<-sigma1_0/b1
+    sigma2_1<-sigma2_0/b2
+    #参数要在合理范围内
+    if(any(diff(th1)<0)||any(diff(th2)<0)){
+      return(Inf)
+    }
+    if(b1<=0||b2<=0){
+      return(Inf)
+    }
+    if(sigma1_0<=0||sigma1_1<=0){
+      return(Inf)
+    }
+    if(sigma2_0<=0||sigma2_1<=0){
+      return(Inf)
+    }
+    if(abs(rho_0)>=1||abs(rho_1)>=1){
+      return(Inf)
+    }
+    #undiseased individual,diseased individual的test result都服从二元正态分布
+    #对于undiseased,diseased中的每个个体,计算paired test result(X,Y)的分布
+    for(i in 1:K){
+      for(j in 1:K) {
+        distribution0[i,j]<-pmvnorm(lower=c(th1[i],th2[j]),upper=c(th1[i+1],th2[j+1]),mean=c(mu1_0,mu2_0),sigma=matrix(c(sigma1_0^2,rho_0*sigma1_0*sigma2_0,rho_0*sigma1_0*sigma2_0,sigma2_0^2),nrow=2,byrow=TRUE))
+        distribution1[i,j]<-pmvnorm(lower=c(th1[i],th2[j]),upper=c(th1[i+1],th2[j+1]),mean=c(mu1_1,mu2_1),sigma=matrix(c(sigma1_1^2,rho_1*sigma1_1*sigma2_1,rho_1*sigma1_1*sigma2_1,sigma2_1^2),nrow=2,byrow=TRUE))
+      }
+    }
+    #计算对数似然函数(不考虑多项分布系数)
+    return(-sum(data0*log(distribution0))-sum(data1*log(distribution1)))
+  }
+  #优化并输出结果
+  start_params<-c(seq(0,1,length=K-1),seq(0,1,length=K-1),0.5,0.5,1,1,1,1)
+  result<-optim(start_params,loglikelihood,method="BFGS")
+  print(result)
+  hessian<-numDeriv::hessian(loglikelihood,result$par)
+  cov_matrix<-solve(hessian)
+  estimation<-list(a1=NULL,b1=NULL,a2=NULL,b2=NULL,cov_matrix=NULL)
+  estimation$a1<-result$par[2*K+1]
+  estimation$b1<-result$par[2*K+2]
+  estimation$a2<-result$par[2*K+3]
+  estimation$b2<-result$par[2*K+4]
+  estimation$cov_matrix<-cov_matrix[(2*K+1):(2*K+4),(2*K+1):(2*K+4)]
+  return(estimation)
+}
+
+
+
+#' estimate the binormal parameters for unpaired continuous data,as well as their variances and covariances
+#' @param data0 continuous test result from undiseased individuals
+#' @param data1 continuous test result from diseased individuals
+#' @export
+params_estimate_continuous_unpaired<-function(data0,data1){
+  loglikelihood<-function(lambda){
+    data0_transformed<-rep(0,length=length(data0))
+    for(i in 1:length(data0)){
+      if(lambda!=0){
+        data0_transformed[i]<-(data0[i]^lambda-1)/lambda
+      }
+      else{
+        data0_transformed[i]<-log(data0[i])
+      }
+    }
+    mean0<-mean(data0_transformed)
+    var0<-var(data0_transformed,na.rm=TRUE)
+    result0<-log(sqrt(var0))*(-length(data0))
+    for(i in 1:length(data0)){
+      result0<-result0+log(data0[i]^(lambda-1))-(data0_transformed[i]-mean0)^2/(2*var0)
+    }
+
+    data1_transformed<-rep(0,length=length(data1))
+    for(i in 1:length(data1)){
+      if(lambda!=0){
+        data1_transformed[i]<-(data1[i]^lambda-1)/lambda
+      }
+      else{
+        data1_transformed[i]<-log(data1[i])
+      }
+    }
+    mean1<-mean(data1_transformed)
+    var1<-var(data1_transformed,na.rm=TRUE)
+    result1<-log(sqrt(var1))*(-length(data1))
+    for(i in 1:length(data1)){
+      result1<-result1+log(data1[i]^(lambda-1))-(data1_transformed[i]-mean1)^2/(2*var1)
+    }
+    return(-result0-result1)
+  }
+  start_param<-1
+  result<-optim(par=start_param,fn=loglikelihood,method="BFGS")
+  lambda<-result$par
+  data0_transformed<-rep(0,length=length(data0))
+  for(i in 1:length(data0)){
+    if(lambda!=0){
+      data0_transformed[i]<-(data0[i]^lambda-1)/lambda
+    }
+    else{
+      data0_transformed[i]<-log(data0[i])
+    }
+  }
+  data1_transformed<-rep(0,length=length(data1))
+  for(i in 1:length(data1)){
+    if(lambda!=0){
+      data1_transformed[i]<-(data1[i]^lambda-1)/lambda
+    }
+    else{
+      data1_transformed[i]<-log(data1[i])
+    }
+  }
+  a<-(mean(data1_transformed)-mean(data0_transformed))/sd(data1_transformed,na.rm=TRUE)
+  b<-sd(data0_transformed,na.rm=TRUE)/sd(data1_transformed,na.rm=TRUE)
+  var_a<-(length(data0)*(a^2+2)+2*length(data1)*b^2)/(2*length(data0)*length(data1))
+  var_b<-(length(data0)+length(data1))*b^2/(2*length(data0)*length(data1))
+  covar_ab<-a*b/(2*length(data1))
+  area.full<-pnorm(a/sqrt(1+b^2))
+  output<-list(lambda=NULL,a=NULL,b=NULL,var_a=NULL,var_b=NULL,covar_ab=NULL,area.full=NULL)
+  output$lambda<-lambda
+  output$a<-a
+  output$b<-b
+  output$var_a<-var_a
+  output$var_b<-var_b
+  output$covar_ab<-covar_ab
+  output$area.full<-area.full
+  return(output)
+}
+
+
+
+#' estimate the binormal parameters for paired continuous data,as well as their variances and covariances
+#' @param data1_no continuous test result from undiseased individuals using test 1
+#' @param data1_yes continuous test result from diseased individuals using test 1
+#' @param data2_no continuous test result from undiseased individuals using test 2
+#' @param data2_yes continuous test result from diseased individuals using test 2
+#' @export
+#这里默认data1_no,data1_yes,data2_no,data2_yes是原始数据,首先进行Box_Cox transformation.
+params_estimate_continuous_paired<-function(data1_no,data1_yes,data2_no,data2_yes){
+  data1_no<-BoxCox(data1_no,data1_yes)$data0_transformed
+  data1_yes<-BoxCox(data1_no,data1_yes)$data1_transformed
+  data2_no<-BoxCox(data2_no,data2_yes)$data0_transformed
+  data2_yes<-BoxCox(data2_no,data2_yes)$data1_transformed
+  #对paired design必须同时考虑两个test的四个test result
+  loglikelihood<-function(params){
+    mu1_0<-params[1]
+    sigma1_0<-params[2]
+    mu2_0<-params[3]
+    sigma2_0<-params[4]
+    rho_0<-params[5]
+    rho_1<-params[6]
+    a1<-params[7]
+    b1<-params[8]
+    a2<-params[9]
+    b2<-params[10]
+    mu1_1<-a1*sigma1_0/b1+mu1_0
+    mu2_1<-a2*sigma2_0/b2+mu2_0
+    sigma1_1<-sigma1_0/b1
+    sigma2_1<-sigma2_0/b2
+    #检验参数是否在合理范围内
+    if(b1<=0||b2<=0){
+      return(Inf)
+    }
+    if(sigma1_0<=0||sigma1_1<=0){
+      return(Inf)
+    }
+    if(sigma2_0<=0||sigma2_1<=0){
+      return(Inf)
+    }
+    if(abs(rho_0)>=1||abs(rho_1)>=1){
+      return(Inf)
+    }
+    log_bivariate0<-function(x,y){
+      #mu1,mu2,sigma1,sigma2对应两个test
+      A<-2*pi*sigma1_0*sigma2_0*sqrt(1-rho_0^2)
+      B<--1/(2*(1-rho_0^2))
+      C<-(x-mu1_0)^2/sigma1_0^2-2*rho_0*(x-mu1_0)*(y-mu2_0)/(sigma1_0*sigma2_0)+(y-mu2_0)^2/sigma2_0^2
+      return(B*C-log(A))
+    }
+    log_bivariate1<-function(x,y){
+      #mu1,mu2,sigma1,sigma2对应两个test
+      A<-2*pi*sigma1_1*sigma2_1*sqrt(1-rho_1^2)
+      B<--1/(2*(1-rho_1^2))
+      C<-(x-mu1_1)^2/sigma1_1^2-2*rho_1*(x-mu1_1)*(y-mu2_1)/(sigma1_1*sigma2_1)+(y-mu2_1)^2/sigma2_1^2
+      return(B*C-log(A))
+    }
+    #undiseased subjects的两个test result,diseased subject的两个test result均服从二元正态分布
+    #最小化负似然函数
+    return(-sum(log_bivariate0(data1_no,data2_no))-sum(log_bivariate1(data1_yes,data2_yes)))
+  }
+  start_params<-c(1,2,1,2,0.5,0.5,1,1,1,1)
+  result<-optim(start_params,loglikelihood,method="BFGS")
+  print(result)
+  hessian<-numDeriv::hessian(loglikelihood,result$par)
+  cov_matrix<-solve(hessian)
+  output<-list(a1=NULL,b1=NULL,a2=NULL,b2=NULL,cov_matrix=NULL)
+  output$a1<-result$par[7]
+  output$b1<-result$par[8]
+  output$a2<-result$par[9]
+  output$b2<-result$par[10]
+  output$cov_matrix<-cov_matrix[7:10,7:10]
+  return(output)
+}
+
+#Box-Cox transformation
+#' Box-Cox transformation
+#' @param data0 continuous test result of undiseased individuals
+#' @param data1 continuous test result of diseased individuals
+BoxCox<-function(data0,data1){
+  loglikelihood<-function(lambda){
+    data0_transformed<-rep(0,length=length(data0))
+    for(i in 1:length(data0)){
+      if(lambda!=0){
+        data0_transformed[i]<-(data0[i]^lambda-1)/lambda
+      }
+      else{
+        data0_transformed[i]<-log(data0[i])
+      }
+    }
+    mean0<-mean(data0_transformed)
+    var0<-var(data0_transformed)
+    result0<-log(sqrt(var0))*(-length(data0))
+    for(i in 1:length(data0)){
+      result0<-result0+log(data0[i]^(lambda-1))-(data0_transformed[i]-mean0)^2/(2*var0)
+    }
+
+    data1_transformed<-rep(0,length=length(data1))
+    for(i in 1:length(data1)){
+      if(lambda!=0){
+        data1_transformed[i]<-(data1[i]^lambda-1)/lambda
+      }
+      else{
+        data1_transformed[i]<-log(data1[i])
+      }
+    }
+    mean1<-mean(data1_transformed)
+    var1<-var(data1_transformed)
+    result1<-log(sqrt(var1))*(-length(data1))
+    for(i in 1:length(data1)){
+      result1<-result1+log(data1[i]^(lambda-1))-(data1_transformed[i]-mean1)^2/(2*var1)
+    }
+    return(-result0-result1)
+  }
+  start_param<-1
+  result<-optim(par=start_param,fn=loglikelihood,method="BFGS")
+  lambda<-result$par
+  data0_transformed<-rep(0,length=length(data0))
+  for(i in 1:length(data0)){
+    if(lambda!=0){
+      data0_transformed[i]<-(data0[i]^lambda-1)/lambda
+    }
+    else{
+      data0_transformed[i]<-log(data0[i])
+    }
+  }
+  data1_transformed<-rep(0,length=length(data1))
+  for(i in 1:length(data1)){
+    if(lambda!=0){
+      data1_transformed[i]<-(data1[i]^lambda-1)/lambda
+    }
+    else{
+      data1_transformed[i]<-log(data1[i])
+    }
+  }
+  output<-list(lambda=NULL,data0_transformed=NULL,data1_transformed=NULL)
+  output$lambda<-lambda
+  output$data0_transformed<-data0_transformed
+  output$data1_transformed<-data1_transformed
+  return(output)
+}
+
+
